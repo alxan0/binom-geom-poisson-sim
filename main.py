@@ -1,8 +1,9 @@
 import streamlit as st
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-from scipy.stats import binom, poisson
-
+from matplotlib.ticker import MaxNLocator
+from scipy.stats import binom, geom, poisson, chisquare
 # ------------------------------
 # Helper functions
 # ------------------------------
@@ -75,8 +76,74 @@ if simulate_btn:
     # Generate data
     data = simulate_data(dist, params, int(size))
 
-    # Display empirical statistics
-    st.subheader("📊 Statistici empirice vs teoretice")
+    # ---------------------------------------------------------------------
+    # 1) Histogram + PMF overlay
+    # ---------------------------------------------------------------------
+  
+    st.subheader("📈 Histogramă vs PMF teoretică")
+
+    # Histogram (empirical)
+    k_min, k_max = int(data.min()), int(data.max())
+    bins = np.arange(k_min - 0.5, k_max + 1.5)
+
+    # Theoretical PMF - expected frequencies
+    k_vals   = np.arange(k_min, k_max + 1)
+    pmf_vals = theoretical_pmf(dist, params, k_vals) 
+    expected = pmf_vals * len(data)
+
+    # Clean Histogram + PMF overlay
+    fig, ax = plt.subplots()
+    ax.hist(data, bins=bins, alpha=0.7, rwidth=0.85, label="Date simulate")
+    ax.plot(k_vals, expected, "o-", label="PMF teoretică", color="C1")
+
+    ax.set_xlabel("k")
+    ax.set_ylabel("Frecvență")
+    ax.set_title(f"{dist}: Histogramă vs PMF")
+    ax.legend()
+    st.pyplot(fig)
+
+    # Detailed Histogram + PMF overlay
+    fig, ax = plt.subplots()
+    counts, _, _ = ax.hist(data, bins=bins, alpha=0.7, rwidth=0.85, label="Date simulate")
+    ax.plot(k_vals, expected, "o-", label="PMF teoretică", color="C1")
+
+    # Labels: empirical above the bar, theoretical to the right of the point
+    offset_x = 0.6  # small right shift
+    offset_y = -1   # small downward shift
+    for idx, k in enumerate(k_vals):
+        # empirical count label
+        ax.text(k, counts[idx] + offset_y, f"{int(counts[idx])}", ha="center", va="top", fontsize=8)
+        # theoretical expected count label
+        ax.text(k + offset_x, expected[idx], f"{expected[idx]:.1f}", ha="center", va="bottom", fontsize=8, color="C1")
+
+    # If labels stick out on the right, add a bit more margin
+    fig.subplots_adjust(right=0.95)
+
+    ax.set_xlabel("k")
+    ax.set_ylabel("Frecvență")
+    ax.set_title(f"{dist}: Histogramă vs PMF")
+    ax.legend()
+    st.pyplot(fig)
+
+    # ---------------------------------------------------------------------
+    # 2) Table with probabilities & differences
+    # ---------------------------------------------------------------------
+    
+    st.subheader("📋 Statistici empirice vs teoretice")
+
+    empirical_prob   = counts / len(data)
+    theoretical_prob = pmf_vals
+    diff             = empirical_prob - theoretical_prob
+
+    table = pd.DataFrame({
+        "k": k_vals,
+        "Empirical P(k)": empirical_prob.round(4),
+        "Theoretical P(k)": theoretical_prob.round(4),
+        "Difference": diff.round(4),
+    })
+    st.dataframe(table, hide_index=True)
+
+    # E(x) and Var(x)
     empirical_mean = np.mean(data)
     empirical_var = np.var(data, ddof=1)
 
@@ -89,31 +156,28 @@ if simulate_btn:
         lam = params["lam"]
         theo_mean, theo_var = lam, lam
 
-    st.write(
-        f"**Medie**: empirică = {empirical_mean:.3f}  |  teoretică = {theo_mean:.3f}\n"
-        f"**Varianță**: empirică = {empirical_var:.3f}  |  teoretică = {theo_var:.3f}"
+    st.markdown(
+        f"""
+        **Medie**: empirică = {empirical_mean:.3f} | teoretică = {theo_mean:.3f}  
+        **Varianță**: empirică = {empirical_var:.3f} | teoretică = {theo_var:.3f}
+        """
     )
 
-    # Histogram + PMF overlay
-    st.subheader("📈 Histogramă vs PMF teoretică")
+    # χ^2 goodness‑of‑fit test (using counts & scaled expected counts)
+    expected *= len(data) / expected.sum()
+    chi_stat, p_val = chisquare(f_obs=counts, f_exp=expected)
+    alpha = 0.05
+    verdict = "✅ Eșantionul se potrivește cu modelul (p ≥ 0.05)" if p_val >= alpha else "❌ Respingem modelul (p < 0.05)"
 
-    fig, ax = plt.subplots()
+    # Largest absolute discrepancy
+    max_idx = int(np.argmax(np.abs(diff)))
+    max_k   = int(k_vals[max_idx])
+    max_gap = diff[max_idx]
 
-    # Determine bin edges for histogram (discrete bins)
-    k_min, k_max = int(np.min(data)), int(np.max(data))
-    bins = np.arange(k_min - 0.5, k_max + 1.5)
-    ax.hist(data, bins=bins, density=False, alpha=0.7, rwidth=0.85, label="Date simulate")
-
-    # Overlay theoretical PMF
-    k_values = np.arange(k_min, k_max + 1)
-    pmf_vals = theoretical_pmf(dist, params, k_values)
-    ax.plot(k_values, pmf_vals * len(data), "o-", label="PMF teoretică")
-
-    ax.set_xlabel("k")
-    ax.set_ylabel("Frecvență")
-    ax.set_title(f"{dist}: Histogramă vs PMF")
-    ax.legend()
-    st.pyplot(fig)
-
-    # Footer note
-    st.info("Distribuția geometrică folosește definiția care numără încercările până la primul succes (k ≥ 1).")
+    st.subheader("📝 Concluzii")
+    st.markdown(
+        f"""
+        *Statistica χ²* : **{chi_stat:.2f}**,   *p-valoare*: **{p_val:.3f}**  →  {verdict}  
+        Cea mai mare diferență absolută de probabilitate la **k = {max_k}**: {max_gap:+.4f}
+        """
+    )
